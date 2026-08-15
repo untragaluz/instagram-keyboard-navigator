@@ -1,6 +1,6 @@
 # Instagram Keyboard Navigator
 
-A [userscript](https://en.wikipedia.org/wiki/Userscript) that adds full keyboard navigation to Instagram web — no mouse, no trackpad. Built to replicate the feel of Twitter/X-style shortcuts (J/K, L to like) but tailored to Instagram's own actions: repost, send via DM, save, and jumping between sections.
+A [userscript](https://en.wikipedia.org/wiki/Userscript) that adds full keyboard navigation to Instagram web — no mouse, no trackpad. Move through the feed with arrow keys and trigger every post action (like, comment, repost, send via DM, save) and section jump (Home, Reels, Messages, Explore, Notifications) from the keyboard.
 
 Works in any browser compatible with [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/) — tested on Firefox (including forks like [Zen Browser](https://zen-browser.app/)) and on Chromium-based browsers (including forks like [Helium Browser](https://helium.computer/)).
 
