@@ -84,4 +84,4 @@ Change any of these values and save again in Tampermonkey to use your own keys.
 
 ## Author
 
-Wilder Zumarán Sarmiento — [@untragaluz](https://github.com/untragaluz)
+WZS — [@untragaluz](https://github.com/untragaluz)
