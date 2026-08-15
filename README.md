@@ -20,7 +20,7 @@ A userscript solves all three: it runs the same way on any browser with Tampermo
 | `↑` | Previous post |
 | `↓` | Next post |
 | `L` | Like / Unlike |
-| `C` | Comment (opens the post's expanded view) |
+| `C` | Comment |
 | `T` | Repost |
 | `S` | Send via DM |
 | `B` | Save |
