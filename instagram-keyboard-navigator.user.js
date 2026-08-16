@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Instagram Keyboard Navigator
 // @namespace    https://github.com/untragaluz
-// @version      1.7.1
-// @description  Navigate the Instagram feed with arrow keys, browse carousels (←/→), like (L), comment (C), repost (T), send (S) and save (B) — no mouse, no trackpad.
+// @version      1.8.0
+// @description  Navigate Instagram's feed, Stories, and posts entirely by keyboard — arrows, carousels, like (L), comment/reply (C), repost (T), send (S), save (B), pause (P) and mute (O) on Stories. No mouse, no trackpad.
 // @author       Wilder Zumarán Sarmiento
 // @match        https://www.instagram.com/*
 // @grant        none
@@ -12,13 +12,27 @@
 // ---------------------------------------------------------------------
 // CHANGELOG (see README.md for the full version-by-version history)
 //
-// Instagram renders a single post in three different ways, and most
-// of the bugs below came from that: the feed (<article> elements),
-// a modal preview overlaid on top of the still-rendered feed (opened
-// via the comment icon or the "C" key), and the full single-post page
-// (/p/postid/, no <article>, no modal wrapper). actionScope() is the
-// function that decides which container to search in, for each case.
+// Instagram renders a single post/story in several different ways,
+// and most of the bugs below came from that: the feed (<article>
+// elements), a modal preview overlaid on top of the still-rendered
+// feed (opened via the comment icon or the "C" key), the full
+// single-post page (/p/postid/, no <article>, no modal wrapper), and
+// Stories (/stories/..., a horizontal tray with several preloaded
+// stories mounted at once). actionScope() is the function that
+// decides which container to search in, for each case.
 //
+// 1.8.0 — Added Stories support: like (L), reply (C, focuses the
+//         "Reply to..." field instead of opening a modal), send (S),
+//         pause/play (P) and mute (O). The script now defers to
+//         Instagram's native ←/→ on Stories instead of hijacking them
+//         for carousel navigation, same as it already did for ↑/↓ on
+//         Reels. Finding the right container for Stories' action
+//         icons was the hard part: neither offsetParent nor CSS
+//         visibility distinguish the active story from the preloaded
+//         ones sitting off-screen in the tray, so the script probes
+//         document.elementFromPoint() near the bottom-right of the
+//         viewport — where Instagram consistently places these
+//         icons — instead of relying on visibility checks alone.
 // 1.7.1 — Like/comment/repost/send/save now work inside the modal
 //         preview: search is scoped to its div[role="dialog"] instead
 //         of the whole page, which was silently matching icons from
@@ -47,10 +61,12 @@
   const KEY_CAROUSEL_NEXT = 'ArrowRight'; // next slide in a carousel post
   const KEY_CAROUSEL_PREV = 'ArrowLeft';  // previous slide in a carousel post
   const KEY_LIKE = 'l';          // like / unlike
-  const KEY_COMMENT = 'c';       // open comments view for the active post
+  const KEY_COMMENT = 'c';       // open comments view for the active post (Reply on Stories)
   const KEY_REPOST = 't';        // repost
   const KEY_SEND = 's';          // send via DM
   const KEY_SAVE = 'b';          // save (bookmark)
+  const KEY_STORY_PAUSE = 'p';   // pause/play the active story
+  const KEY_STORY_MUTE = 'o';    // mute/unmute the active story
   const HIGHLIGHT_COLOR = '#0095f6'; // Instagram-style blue, for the active post's outline
 
   // Section navigation shortcuts — we look up the real link in
@@ -68,6 +84,13 @@
   // reels — we defer to that instead of hijacking the same keys.
   function isOnReelsPage() {
     return window.location.pathname.startsWith('/reels/');
+  }
+
+  // Instagram's own Stories view already uses Left/Right to move
+  // between stories (its scroll is horizontal) — we defer to that
+  // instead of hijacking the same keys for carousel navigation.
+  function isOnStoriesPage() {
+    return window.location.pathname.startsWith('/stories/');
   }
 
   // When you open a single post's expanded view (e.g. by clicking the
@@ -191,6 +214,33 @@
   }
 
   // ---------------------------------------------------------------------
+  // Finds the container of the story that's actually on screen.
+  // Instagram preloads several stories at once (current, next, and
+  // others in the tray), each keeping its own full set of action
+  // icons mounted — but unlike the feed-behind-modal case, these
+  // aren't hidden via display/visibility, they're just positioned
+  // off to the side. Neither offsetParent nor CSS visibility tell
+  // them apart, so instead we ask the browser directly: what's the
+  // element actually rendered at the center of the viewport right
+  // now? We then walk up to the nearest ancestor with an inline
+  // pixel width/height style, which is how Instagram sizes each
+  // individual story's video/image wrapper.
+  // ---------------------------------------------------------------------
+  // Finds the container that holds the active story's action icons
+  // (like, comment, send). Instagram positions these at the bottom of
+  // the story card, not at its visual center — so we probe a point
+  // near the bottom-right of the viewport, where the like/send
+  // buttons consistently sit, instead of the center (which lands on
+  // the story's video/image content instead).
+  function findActiveStoryContainer() {
+    const el = document.elementFromPoint(
+      window.innerWidth * 0.75,
+      window.innerHeight * 0.9
+    );
+    return el || null;
+  }
+
+  // ---------------------------------------------------------------------
   // Returns the right container to search for action icons (like,
   // comment, repost, send, save) depending on where we are:
   // - In the feed, icons live inside the active post's <article>.
@@ -202,11 +252,20 @@
   //   (confirmed via div[role="dialog"]) we scope to it specifically;
   //   otherwise we fall back to the whole document for the full-page
   //   view, which doesn't use a dialog wrapper at all.
+  // - On Stories, Instagram preloads several stories at once (current,
+  //   next, others in the tray), each with its own duplicated set of
+  //   icons — but unlike the feed-behind-modal case, the preloaded
+  //   ones are properly hidden (no offsetParent), so searching the
+  //   whole document and relying on findVisibleIconButton's visibility
+  //   check is enough to land on the right one.
   // ---------------------------------------------------------------------
   function actionScope() {
     if (isOnExpandedPostView()) {
       const dialog = document.querySelector('div[role="dialog"]');
       return dialog || document;
+    }
+    if (isOnStoriesPage()) {
+      return findActiveStoryContainer() || document;
     }
     return currentPostEl;
   }
@@ -264,6 +323,17 @@
   // We look for that icon by its aria-label, same as we do with like.
   // ---------------------------------------------------------------------
   function openComments() {
+    // Stories don't have a comments modal — they have an always-visible
+    // "Reply to..." text field instead. We focus it directly rather
+    // than looking for a clickable icon.
+    if (isOnStoriesPage()) {
+      const replyField = document.querySelector('textarea[placeholder*="Reply"]');
+      if (replyField) {
+        replyField.focus();
+      }
+      return;
+    }
+
     const scope = actionScope();
     if (!scope) return;
 
@@ -327,7 +397,7 @@
 
     const button = findVisibleIconButton(
       scope,
-      'svg[aria-label="Share"], svg[aria-label="Share Post"]'
+      'svg[aria-label="Share"], svg[aria-label="Share Post"], svg[aria-label="Direct"]'
     );
     if (button) {
       button.click();
@@ -344,6 +414,45 @@
     const button = findVisibleIconButton(
       scope,
       'svg[aria-label="Save"], svg[aria-label="Remove"]'
+    );
+    if (button) {
+      button.click();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Pauses/resumes the active story. Instagram swaps the icon between
+  // "Play" (when paused) and, when playing, an implicit pause state
+  // with no equivalent "Pause" aria-label observed — we search for
+  // "Play" first since that's the one confirmed to exist; if the
+  // story is currently playing, clicking its own toggle button (found
+  // via the same icon position) pauses it regardless of label.
+  // ---------------------------------------------------------------------
+  function toggleStoryPause() {
+    if (!isOnStoriesPage()) return;
+    const scope = actionScope();
+    if (!scope) return;
+
+    const button = findVisibleIconButton(
+      scope,
+      'svg[aria-label="Play"], svg[aria-label="Pause"]'
+    );
+    if (button) {
+      button.click();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Mutes/unmutes the active story's audio.
+  // ---------------------------------------------------------------------
+  function toggleStoryMute() {
+    if (!isOnStoriesPage()) return;
+    const scope = actionScope();
+    if (!scope) return;
+
+    const button = findVisibleIconButton(
+      scope,
+      'svg[aria-label="Audio is muted"], svg[aria-label="Audio is playing"], svg[aria-label="Toggle audio"]'
     );
     if (button) {
       button.click();
@@ -386,13 +495,13 @@
       goPrev();
       return;
     }
-    if (e.key === KEY_CAROUSEL_NEXT) {
+    if (e.key === KEY_CAROUSEL_NEXT && !isOnStoriesPage()) {
       e.preventDefault();
       e.stopPropagation();
       carouselNext();
       return;
     }
-    if (e.key === KEY_CAROUSEL_PREV) {
+    if (e.key === KEY_CAROUSEL_PREV && !isOnStoriesPage()) {
       e.preventDefault();
       e.stopPropagation();
       carouselPrev();
@@ -406,6 +515,8 @@
       key === KEY_REPOST ||
       key === KEY_SEND ||
       key === KEY_SAVE ||
+      key === KEY_STORY_PAUSE ||
+      key === KEY_STORY_MUTE ||
       key === 'h' ||
       !!NAV_SHORTCUTS[key];
 
@@ -432,6 +543,12 @@
     } else if (key === KEY_SAVE) {
       e.preventDefault();
       toggleSave();
+    } else if (key === KEY_STORY_PAUSE) {
+      e.preventDefault();
+      toggleStoryPause();
+    } else if (key === KEY_STORY_MUTE) {
+      e.preventDefault();
+      toggleStoryMute();
     } else if (key === 'h') {
       e.preventDefault();
       goHome();
