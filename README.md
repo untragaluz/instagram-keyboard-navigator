@@ -19,8 +19,10 @@ A userscript solves all three: it runs the same way on any browser with Tampermo
 |---|---|
 | `↑` | Previous post |
 | `↓` | Next post |
+| `←` | Previous slide (on carousel posts) |
+| `→` | Next slide (on carousel posts) |
 | `L` | Like / Unlike |
-| `C` | Comment |
+| `C` | Comment (opens the post's expanded view) |
 | `T` | Repost |
 | `S` | Send via DM |
 | `B` | Save |
@@ -31,6 +33,8 @@ A userscript solves all three: it runs the same way on any browser with Tampermo
 | `N` | Notifications |
 
 The active post is highlighted with a blue outline, so you always know which one you're about to act on before pressing an action key.
+
+On the Reels page (`/reels/`), the script steps aside for `↑`/`↓` and lets Instagram's own built-in shortcuts handle moving between reels.
 
 The script ignores keystrokes while you're typing in any text field (comments, search, DMs), so it won't interfere with normal typing.
 
@@ -74,9 +78,32 @@ Change any of these values and save again in Tampermonkey to use your own keys.
   Array.from(document.querySelector('.jkl-nav-active').querySelectorAll('svg[aria-label]'))
     .map(el => el.getAttribute('aria-label'))
   ```
-  This lists the real `aria-label` values Instagram is currently using — compare them against what each function looks for (`toggleLike`, `openComments`, `toggleRepost`, `openSend`, `toggleSave`) and adjust the selector if it changed.
+  This lists the real `aria-label` values Instagram is currently using — compare them against what each function looks for (`toggleLike`, `openComments`, `toggleRepost`, `openSend`, `toggleSave`) and adjust the selector if it changed. Note that some buttons (like the carousel's "Next"/"Go back") carry their `aria-label` directly on the `<button>` instead of on an inner `<svg>` — if a search for `svg[aria-label=...]` comes up empty, try `button[aria-label=...]` instead.
 - The section-navigation shortcuts (R, M, E, N) look up the real link in Instagram's side menu by its `href` and click it, instead of forcing a URL change — this respects Instagram's internal React router.
 - The keydown listener runs in the capture phase (`addEventListener(..., true)`) and uses `stopPropagation()` to prevent a key from also triggering a native Instagram shortcut bound to the same key (this happened with `B`, which collided with Instagram's native "give feedback" shortcut).
+- On `/reels/`, Instagram already binds `↑`/`↓` to move between reels — the script detects this route and steps aside instead of double-handling the same keys.
+- Instagram renders a single post in three different ways, and each needed its own handling:
+  - **Feed**: each post is an `<article>`, tracked as `currentPostEl`.
+  - **Modal preview** (opened by clicking the comment icon, or pressing `C`): Instagram overlays a `div[role="dialog"]` on top of the still-rendered feed. Searching the whole page for an icon can silently match one of the (often several) identical icons belonging to feed posts hidden behind the overlay — the fix is to scope the search to that dialog specifically once it's present.
+  - **Full page** (`/p/postid/`, opened in its own tab/URL): no `<article>` and no dialog wrapper at all — the search falls back to the whole `document`.
+
+  `actionScope()` centralizes this decision for every action function.
+
+## Changelog
+
+- **1.7.1** — Fixed like/comment/repost/send/save not working inside the modal preview opened by `C`: search is now scoped to the `div[role="dialog"]` overlay instead of the whole page, so it stops matching hidden feed posts behind it. Also added the `"Share Post"` label variant for the send action.
+- **1.7.0** — Fixed the same five actions not working at all on the full single-post page (`/p/postid/`), which doesn't use `<article>`. Introduced `actionScope()` to centralize where each action searches, and `findVisibleIconButton()` to prefer the on-screen icon when several matches exist.
+- **1.6.1** — Investigated a focus issue in the modal preview (later found unrelated to the real bug in 1.7.x).
+- **1.6.0** — Fixed like/comment/repost/send/save not working on the full single-post page.
+- **1.5.2** — Fixed carousel arrows (←/→) not working inside the modal preview or full post page; scoped the search to `document` there instead of the feed's `<article>`.
+- **1.5.1** — Fixed the send shortcut (`S`): Instagram labels that icon `"Share"`, not `"Send"` as first assumed.
+- **1.5.0** — Added carousel navigation (`←`/`→`) and made the script defer to Instagram's native `↑`/`↓` shortcuts on the Reels page.
+- **1.4.1** — Fixed the repost shortcut (`T`) after a duplicate `aria-label` match with the send icon.
+- **1.4.0** — Fixed `B` (save) also triggering Instagram's native "give feedback" dialog, by moving the listener to the capture phase and adding `stopPropagation()`.
+- **1.3.0** — Added repost (`T`), send via DM (`S`), and save (`B`).
+- **1.2.0** — Renamed the project to *Instagram Keyboard Navigator* and fixed the comment shortcut (`C`) to open the comments view instead of looking for a text field that doesn't exist in the feed.
+- **1.1.0** — Made post navigation track the focused post directly (instead of just an index) to avoid skipping posts when the feed loads new content while navigating quickly.
+- **1.0.0** — First version: post navigation and like.
 
 ## License
 
