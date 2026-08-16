@@ -1,13 +1,40 @@
 // ==UserScript==
 // @name         Instagram Keyboard Navigator
 // @namespace    https://github.com/untragaluz
-// @version      1.4.1
-// @description  Navigate the Instagram feed with arrow keys, like (L), comment (C), repost (T), send (S) and save (B) — no mouse, no trackpad.
+// @version      1.7.1
+// @description  Navigate the Instagram feed with arrow keys, browse carousels (←/→), like (L), comment (C), repost (T), send (S) and save (B) — no mouse, no trackpad.
 // @author       Wilder Zumarán Sarmiento
 // @match        https://www.instagram.com/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
+
+// ---------------------------------------------------------------------
+// CHANGELOG (see README.md for the full version-by-version history)
+//
+// Instagram renders a single post in three different ways, and most
+// of the bugs below came from that: the feed (<article> elements),
+// a modal preview overlaid on top of the still-rendered feed (opened
+// via the comment icon or the "C" key), and the full single-post page
+// (/p/postid/, no <article>, no modal wrapper). actionScope() is the
+// function that decides which container to search in, for each case.
+//
+// 1.7.1 — Like/comment/repost/send/save now work inside the modal
+//         preview: search is scoped to its div[role="dialog"] instead
+//         of the whole page, which was silently matching icons from
+//         feed posts hidden behind the overlay.
+// 1.7.0 — Fixed the same five actions on the full single-post page.
+// 1.5.2 — Fixed carousel arrows (←/→) inside the modal/full post page.
+// 1.5.1 — Fixed send (S): Instagram's aria-label is "Share", not "Send".
+// 1.5.0 — Added carousel navigation; deferred to Instagram's native
+//         ↑/↓ on the Reels page instead of double-handling them.
+// 1.4.0 — Moved the listener to the capture phase and added
+//         stopPropagation() so our keys stop triggering Instagram's
+//         own native shortcuts on the same key (happened with "B").
+// 1.1.0 — Post navigation now tracks the focused post directly
+//         instead of just an index, to avoid skipping posts when the
+//         feed loads new content while navigating quickly.
+// ---------------------------------------------------------------------
 
 (function () {
   'use strict';
@@ -17,6 +44,8 @@
   // ---------------------------------------------------------------------
   const KEY_NEXT = 'ArrowDown';  // next post
   const KEY_PREV = 'ArrowUp';    // previous post
+  const KEY_CAROUSEL_NEXT = 'ArrowRight'; // next slide in a carousel post
+  const KEY_CAROUSEL_PREV = 'ArrowLeft';  // previous slide in a carousel post
   const KEY_LIKE = 'l';          // like / unlike
   const KEY_COMMENT = 'c';       // open comments view for the active post
   const KEY_REPOST = 't';        // repost
@@ -34,6 +63,20 @@
     e: '/explore/',         // Explore
     n: '/notifications/',   // Notifications
   };
+
+  // Instagram's own Reels view already uses Up/Down to move between
+  // reels — we defer to that instead of hijacking the same keys.
+  function isOnReelsPage() {
+    return window.location.pathname.startsWith('/reels/');
+  }
+
+  // When you open a single post's expanded view (e.g. by clicking the
+  // comment icon), Instagram mounts it separately from the feed's
+  // <article> — so carousel buttons there live outside currentPostEl.
+  // We detect this via the URL pattern Instagram uses for single posts.
+  function isOnExpandedPostView() {
+    return /^\/p\/[^/]+\/?/.test(window.location.pathname);
+  }
 
   // ---------------------------------------------------------------------
   // STATE
@@ -126,6 +169,49 @@
   }
 
   // ---------------------------------------------------------------------
+  // When searching the whole document (expanded post view), Instagram
+  // often keeps several matching elements mounted at once — e.g. the
+  // same feed post preloaded off-screen behind the modal. Picking the
+  // first match can silently act on the wrong post. We prefer the
+  // element that's actually visible on screen.
+  // ---------------------------------------------------------------------
+  function findVisibleButton(scope, selector) {
+    const candidates = Array.from(scope.querySelectorAll(selector));
+    return candidates.find((el) => el.offsetParent !== null) || candidates[0];
+  }
+
+  // Same idea, but for icons built as an <svg> inside a clickable
+  // ancestor (button or div[role="button"]) — the pattern used by
+  // like, comment, repost, send and save.
+  function findVisibleIconButton(scope, svgSelector) {
+    const svgs = Array.from(scope.querySelectorAll(svgSelector));
+    const visibleSvg = svgs.find((el) => el.offsetParent !== null) || svgs[0];
+    if (!visibleSvg) return null;
+    return visibleSvg.closest('button, div[role="button"]');
+  }
+
+  // ---------------------------------------------------------------------
+  // Returns the right container to search for action icons (like,
+  // comment, repost, send, save) depending on where we are:
+  // - In the feed, icons live inside the active post's <article>.
+  // - In the expanded post view, Instagram either shows a full page
+  //   (/p/...) or a modal overlay on top of the feed (opened via C).
+  //   The modal case is tricky: the feed keeps rendering behind it,
+  //   so searching the whole document can match icons belonging to
+  //   posts hidden behind the overlay. When a dialog is present
+  //   (confirmed via div[role="dialog"]) we scope to it specifically;
+  //   otherwise we fall back to the whole document for the full-page
+  //   view, which doesn't use a dialog wrapper at all.
+  // ---------------------------------------------------------------------
+  function actionScope() {
+    if (isOnExpandedPostView()) {
+      const dialog = document.querySelector('div[role="dialog"]');
+      return dialog || document;
+    }
+    return currentPostEl;
+  }
+
+  // ---------------------------------------------------------------------
   // Likes or unlikes the currently focused post.
   // Instagram doesn't expose a reliable fixed attribute like
   // data-testid="like-button", so we look for the like button's SVG
@@ -133,16 +219,13 @@
   // "Like" or "Unlike".
   // ---------------------------------------------------------------------
   function toggleLike() {
-    if (!currentPostEl) return;
+    const scope = actionScope();
+    if (!scope) return;
 
-    const likeSvg = currentPostEl.querySelector(
+    const button = findVisibleIconButton(
+      scope,
       'svg[aria-label="Like"], svg[aria-label="Unlike"]'
     );
-    if (!likeSvg) return;
-
-    // The SVG isn't directly clickable; the real button is a nearby
-    // ancestor (button or div with role="button").
-    const button = likeSvg.closest('button, div[role="button"]');
     if (button) {
       button.click();
     }
@@ -181,12 +264,40 @@
   // We look for that icon by its aria-label, same as we do with like.
   // ---------------------------------------------------------------------
   function openComments() {
-    if (!currentPostEl) return;
+    const scope = actionScope();
+    if (!scope) return;
 
-    const commentSvg = currentPostEl.querySelector('svg[aria-label="Comment"]');
-    if (!commentSvg) return;
+    const button = findVisibleIconButton(scope, 'svg[aria-label="Comment"]');
+    if (button) {
+      button.click();
+    }
+  }
 
-    const button = commentSvg.closest('button, div[role="button"]');
+  // ---------------------------------------------------------------------
+  // Moves to the next/previous slide in a carousel post (multiple
+  // photos/videos in one post). Instagram shows small left/right
+  // arrow buttons over the media when a post has more than one item.
+  // Unlike the other post actions, these buttons carry their
+  // aria-label directly on the <button> itself, not on an inner SVG
+  // — confirmed as "Go back" / "Next".
+  // If the active post isn't a carousel, these buttons simply don't
+  // exist and the function does nothing.
+  // ---------------------------------------------------------------------
+  function carouselNext() {
+    const scope = actionScope();
+    if (!scope) return;
+
+    const button = findVisibleButton(scope, 'button[aria-label="Next"]');
+    if (button) {
+      button.click();
+    }
+  }
+
+  function carouselPrev() {
+    const scope = actionScope();
+    if (!scope) return;
+
+    const button = findVisibleButton(scope, 'button[aria-label="Go back"]');
     if (button) {
       button.click();
     }
@@ -196,12 +307,10 @@
   // Reposts the active post (the two curved arrows icon).
   // ---------------------------------------------------------------------
   function toggleRepost() {
-    if (!currentPostEl) return;
+    const scope = actionScope();
+    if (!scope) return;
 
-    const repostSvg = currentPostEl.querySelector('svg[aria-label="Repost"]');
-    if (!repostSvg) return;
-
-    const button = repostSvg.closest('button, div[role="button"]');
+    const button = findVisibleIconButton(scope, 'svg[aria-label="Repost"]');
     if (button) {
       button.click();
     }
@@ -213,12 +322,13 @@
   // "Send" as we initially assumed.
   // ---------------------------------------------------------------------
   function openSend() {
-    if (!currentPostEl) return;
+    const scope = actionScope();
+    if (!scope) return;
 
-    const sendSvg = currentPostEl.querySelector('svg[aria-label="Share"]');
-    if (!sendSvg) return;
-
-    const button = sendSvg.closest('button, div[role="button"]');
+    const button = findVisibleIconButton(
+      scope,
+      'svg[aria-label="Share"], svg[aria-label="Share Post"]'
+    );
     if (button) {
       button.click();
     }
@@ -228,14 +338,13 @@
   // Saves / unsaves the active post (bookmark icon).
   // ---------------------------------------------------------------------
   function toggleSave() {
-    if (!currentPostEl) return;
+    const scope = actionScope();
+    if (!scope) return;
 
-    const saveSvg = currentPostEl.querySelector(
+    const button = findVisibleIconButton(
+      scope,
       'svg[aria-label="Save"], svg[aria-label="Remove"]'
     );
-    if (!saveSvg) return;
-
-    const button = saveSvg.closest('button, div[role="button"]');
     if (button) {
       button.click();
     }
@@ -262,17 +371,31 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return; // don't override system/browser shortcuts
 
     // Arrow keys arrive as "ArrowUp"/"ArrowDown" in e.key — we compare
-    // them as-is, without lowercasing.
-    if (e.key === KEY_NEXT) {
+    // them as-is, without lowercasing. On the Reels page, Instagram
+    // already uses Up/Down to move between reels, so we step aside
+    // and let those keystrokes through untouched.
+    if (e.key === KEY_NEXT && !isOnReelsPage()) {
       e.preventDefault();
       e.stopPropagation();
       goNext();
       return;
     }
-    if (e.key === KEY_PREV) {
+    if (e.key === KEY_PREV && !isOnReelsPage()) {
       e.preventDefault();
       e.stopPropagation();
       goPrev();
+      return;
+    }
+    if (e.key === KEY_CAROUSEL_NEXT) {
+      e.preventDefault();
+      e.stopPropagation();
+      carouselNext();
+      return;
+    }
+    if (e.key === KEY_CAROUSEL_PREV) {
+      e.preventDefault();
+      e.stopPropagation();
+      carouselPrev();
       return;
     }
 
