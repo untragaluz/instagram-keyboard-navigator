@@ -1,6 +1,6 @@
 # Instagram Keyboard Navigator
 
-A [userscript](https://en.wikipedia.org/wiki/Userscript) that adds full keyboard navigation to Instagram web — no mouse, no trackpad. Move through the feed with arrow keys, browse carousel posts, control Stories (pause, mute, reply), and trigger every post action (like, comment, repost, send via DM, save) and section jump (Home, Reels, Messages, Explore, Notifications) from the keyboard.
+A [userscript](https://en.wikipedia.org/wiki/Userscript) that adds full keyboard navigation to Instagram web — no mouse, no trackpad. Move through the feed with arrow keys, browse carousel posts, control Stories and Reels (pause, mute, reply), and trigger every post action (like, comment, repost, send via DM, save) and section jump (Home, Reels, Messages, Explore, Notifications) from the keyboard.
 
 Works in any browser compatible with [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/) — tested on Firefox (including forks like [Zen Browser](https://zen-browser.app/)) and on Chromium-based browsers (including forks like [Helium Browser](https://helium.computer/)).
 
@@ -29,7 +29,7 @@ A userscript solves all three: it runs the same way on any browser with Tampermo
 | `S` | Send via DM |
 | `B` | Save |
 | `P` | Pause / play the active story (Stories only) |
-| `O` | Mute / unmute the active story (Stories only) |
+| `O` | Mute / unmute the active story or reel (Stories and Reels) |
 | `H` | Home (reloads the page) |
 | `R` | Reels |
 | `M` | Messages |
@@ -84,20 +84,22 @@ Change any of these values and save again in Tampermonkey to use your own keys.
   Array.from(document.querySelector('.jkl-nav-active').querySelectorAll('svg[aria-label]'))
     .map(el => el.getAttribute('aria-label'))
   ```
-  This lists the real `aria-label` values Instagram is currently using — compare them against what each function looks for (`toggleLike`, `openComments`, `toggleRepost`, `openSend`, `toggleSave`) and adjust the selector if it changed. Note that some buttons (like the carousel's "Next"/"Go back") carry their `aria-label` directly on the `<button>` instead of on an inner `<svg>` — if a search for `svg[aria-label=...]` comes up empty, try `button[aria-label=...]` instead.
+  This lists the real `aria-label` values Instagram is currently using — compare them against what each function looks for (`toggleLike`, `openComments`, `toggleRepost`, `openSend`, `toggleSave`) and adjust the selector if it changed. Note that some buttons (like the carousel's "Next"/"Go back") carry their `aria-label` directly on the `<button>` instead of on an inner `<svg>` — if a search for `svg[aria-label=...]` comes up empty, try `button[aria-label=...]` instead. On Reels or Stories, where several duplicates of the same icon can exist at once, list all of them and inspect each one's `getBoundingClientRect()` to see which is actually on screen.
 - The section-navigation shortcuts (R, M, E, N) look up the real link in Instagram's side menu by its `href` and click it, instead of forcing a URL change — this respects Instagram's internal React router.
 - The keydown listener runs in the capture phase (`addEventListener(..., true)`) and uses `stopPropagation()` to prevent a key from also triggering a native Instagram shortcut bound to the same key (this happened with `B`, which collided with Instagram's native "give feedback" shortcut).
 - On `/reels/`, Instagram already binds `↑`/`↓` to move between reels, and on `/stories/...` it already binds `←`/`→` to move between stories — the script detects these routes and steps aside instead of double-handling the same keys.
-- Instagram renders a single post/story in several different ways, and each needed its own handling:
+- Instagram renders a single post/story/reel in several different ways, and each needed its own handling:
   - **Feed**: each post is an `<article>`, tracked as `currentPostEl`.
   - **Modal preview** (opened by clicking the comment icon, or pressing `C`): Instagram overlays a `div[role="dialog"]` on top of the still-rendered feed. Searching the whole page for an icon can silently match one of the (often several) identical icons belonging to feed posts hidden behind the overlay — the fix is to scope the search to that dialog specifically once it's present.
   - **Full page** (`/p/postid/`, opened in its own tab/URL): no `<article>` and no dialog wrapper at all — the search falls back to the whole `document`.
-  - **Stories** (`/stories/username/storyid/`): Instagram preloads several stories at once (the current one, the next one, others in the tray), each keeping its own full set of action icons mounted. Unlike the modal case, neither `offsetParent` nor CSS `visibility` reliably tell the active story apart from the preloaded ones — they're just positioned off to the side, not hidden. The fix that worked: ask the browser directly what's rendered at a point near the bottom-right of the viewport (`document.elementFromPoint`), since that's where Instagram consistently places the like/reply/send icons, and scope the search to that element instead of guessing from DOM structure alone.
+  - **Stories** (`/stories/username/storyid/`): Instagram preloads several stories at once (the current one, the next one, others in the tray), each keeping its own full set of action icons mounted. Unlike the modal case, neither `offsetParent` nor CSS `visibility` reliably tell the active story apart from the preloaded ones — they're just positioned off to the side, not hidden. The fix: ask the browser directly what's rendered at a point near the bottom-right of the viewport (`document.elementFromPoint`), since that's where Instagram consistently places the like/reply/send icons, and scope the search to that element instead of guessing from DOM structure alone.
+  - **Reels** (`/reels/reelid/`): Instagram preloads several reels in a vertical column, each exactly one viewport-height apart, with its own full set of action icons. A single fixed point (the approach used for Stories) wasn't reliable here — the fix instead checks every duplicate icon's real `getBoundingClientRect()` and picks the one that actually overlaps the current viewport. This logic lives in `findVisibleIconButton()` and benefits any future case with the same kind of duplication.
 
-  `actionScope()` centralizes this decision for every action function.
+  `actionScope()` centralizes which container each context searches in, and `findVisibleIconButton()` centralizes picking the right one when duplicates exist.
 
 ## Changelog
 
+- **1.9.0** — Added Reels support: like (`L`), comment (`C`), repost (`T`), send (`S`), save (`B`) and mute (`O`). `findVisibleIconButton()` now picks the on-screen icon by checking each duplicate's real position (`getBoundingClientRect()`) instead of relying on `offsetParent` alone, since every preloaded reel in the vertical column still has a valid `offsetParent`. `toggleStoryMute()` was renamed to `toggleMute()` and now works on both Stories and Reels.
 - **1.8.0** — Added Stories support: like (`L`), reply (`C`, focuses the "Reply to..." field instead of opening a modal), send (`S`), pause/play (`P`) and mute (`O`). The script now defers to Instagram's native `←`/`→` on Stories, the same way it already did for `↑`/`↓` on Reels.
 - **1.7.1** — Fixed like/comment/repost/send/save not working inside the modal preview opened by `C`: search is now scoped to the `div[role="dialog"]` overlay instead of the whole page, so it stops matching hidden feed posts behind it. Also added the `"Share Post"` label variant for the send action.
 - **1.7.0** — Fixed the same five actions not working at all on the full single-post page (`/p/postid/`), which doesn't use `<article>`. Introduced `actionScope()` to centralize where each action searches, and `findVisibleIconButton()` to prefer the on-screen icon when several matches exist.
@@ -119,4 +121,4 @@ Change any of these values and save again in Tampermonkey to use your own keys.
 
 ## Author
 
-WZS — [@untragaluz](https://github.com/untragaluz)
+Wilder Zumarán Sarmiento — [@untragaluz](https://github.com/untragaluz)
