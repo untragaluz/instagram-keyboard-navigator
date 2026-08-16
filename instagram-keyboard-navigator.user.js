@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Instagram Keyboard Navigator
 // @namespace    https://github.com/untragaluz
-// @version      1.8.0
-// @description  Navigate Instagram's feed, Stories, and posts entirely by keyboard — arrows, carousels, like (L), comment/reply (C), repost (T), send (S), save (B), pause (P) and mute (O) on Stories. No mouse, no trackpad.
+// @version      1.9.0
+// @description  Navigate Instagram's feed, Reels, Stories, and posts entirely by keyboard — arrows, carousels, like (L), comment/reply (C), repost (T), send (S), save (B), pause (P) and mute (O). No mouse, no trackpad.
 // @author       Wilder Zumarán Sarmiento
 // @match        https://www.instagram.com/*
 // @grant        none
@@ -12,15 +12,31 @@
 // ---------------------------------------------------------------------
 // CHANGELOG (see README.md for the full version-by-version history)
 //
-// Instagram renders a single post/story in several different ways,
-// and most of the bugs below came from that: the feed (<article>
-// elements), a modal preview overlaid on top of the still-rendered
-// feed (opened via the comment icon or the "C" key), the full
-// single-post page (/p/postid/, no <article>, no modal wrapper), and
+// Instagram renders a single post/story/reel in several different
+// ways, and most of the bugs below came from that: the feed
+// (<article> elements), a modal preview overlaid on top of the still-
+// rendered feed (opened via the comment icon or the "C" key), the
+// full single-post page (/p/postid/, no <article>, no modal wrapper),
 // Stories (/stories/..., a horizontal tray with several preloaded
-// stories mounted at once). actionScope() is the function that
-// decides which container to search in, for each case.
+// stories mounted at once), and Reels (/reels/..., a vertical column
+// with several preloaded reels stacked one screen-height apart).
+// actionScope() decides which container to search in, and
+// findVisibleIconButton() decides which of several duplicated icons
+// is the one actually on screen, for each case.
 //
+// 1.9.0 — Added Reels support: like (L), comment (C), repost (T),
+//         send (S), save (B) and mute (O) now work there too. The
+//         hard part: Reels preloads several reels in a vertical
+//         column, each exactly one viewport-height apart, so every
+//         action icon exists multiple times in the DOM at once —
+//         and unlike Stories, a single fixed point wasn't reliable
+//         enough to pick the right one consistently. The fix:
+//         findVisibleIconButton() now checks each candidate's real
+//         getBoundingClientRect() and picks the one that actually
+//         overlaps the viewport, instead of guessing a coordinate.
+//         This also made the fallback used elsewhere more robust in
+//         general. toggleStoryMute() was renamed to toggleMute() and
+//         now works on both Stories and Reels.
 // 1.8.0 — Added Stories support: like (L), reply (C, focuses the
 //         "Reply to..." field instead of opening a modal), send (S),
 //         pause/play (P) and mute (O). The script now defers to
@@ -208,6 +224,29 @@
   // like, comment, repost, send and save.
   function findVisibleIconButton(scope, svgSelector) {
     const svgs = Array.from(scope.querySelectorAll(svgSelector));
+
+    // First, prefer an icon whose button is genuinely within the
+    // vertical viewport — this is what actually distinguishes the
+    // on-screen reel/story from others stacked above or below it in
+    // a preloaded column (offsetParent alone isn't enough there,
+    // since every preloaded item still has a valid offsetParent).
+    const onScreen = svgs.find((el) => {
+      const button = el.closest('button, div[role="button"]');
+      if (!button) return false;
+      const rect = button.getBoundingClientRect();
+      return (
+        rect.width > 0 &&
+        rect.bottom > 0 &&
+        rect.top < window.innerHeight &&
+        rect.right > 0 &&
+        rect.left < window.innerWidth
+      );
+    });
+    if (onScreen) return onScreen.closest('button, div[role="button"]');
+
+    // Fallback to the original offsetParent check for contexts where
+    // duplicates aren't stacked by scroll position (e.g. the modal
+    // preview, where the check above may be too strict).
     const visibleSvg = svgs.find((el) => el.offsetParent !== null) || svgs[0];
     if (!visibleSvg) return null;
     return visibleSvg.closest('button, div[role="button"]');
@@ -240,6 +279,11 @@
     return el || null;
   }
 
+  // Same idea as findActiveStoryContainer, but for Reels: Instagram
+  // preloads several reels in a vertical column, each with its own
+  // full set of action icons mounted. The like/comment/repost column
+  // sits centered vertically on the right side of the video (not the
+  // bottom-right like Stories), so we probe a different point.
   // ---------------------------------------------------------------------
   // Returns the right container to search for action icons (like,
   // comment, repost, send, save) depending on where we are:
@@ -266,6 +310,9 @@
     }
     if (isOnStoriesPage()) {
       return findActiveStoryContainer() || document;
+    }
+    if (isOnReelsPage()) {
+      return document;
     }
     return currentPostEl;
   }
@@ -443,10 +490,10 @@
   }
 
   // ---------------------------------------------------------------------
-  // Mutes/unmutes the active story's audio.
+  // Mutes/unmutes the active story or reel's audio.
   // ---------------------------------------------------------------------
-  function toggleStoryMute() {
-    if (!isOnStoriesPage()) return;
+  function toggleMute() {
+    if (!isOnStoriesPage() && !isOnReelsPage()) return;
     const scope = actionScope();
     if (!scope) return;
 
@@ -548,7 +595,7 @@
       toggleStoryPause();
     } else if (key === KEY_STORY_MUTE) {
       e.preventDefault();
-      toggleStoryMute();
+      toggleMute();
     } else if (key === 'h') {
       e.preventDefault();
       goHome();
